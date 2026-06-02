@@ -14,10 +14,9 @@ src/NTSRadio/                 # <- this folder is deployed to .../Plugins/NTSRad
   install.xml                 # plugin manifest
   Plugin.pm                   # menu (OPML) + metadata provider + 60s poller
   strings.txt                 # EN/IT strings
-  HTML/EN/plugins/NTSRadio/html/icon.png
+  HTML/EN/plugins/NTSRadio/html/icon.png   # official NTS logo (960x960)
 deploy.sh                     # rsync to the LMS plugins dir + restart (run on device)
 samples/live.json             # reference fixture of the NTS /api/v2/live response
-tools/make_icon.py            # regenerates a placeholder icon with no deps
 ```
 
 ## How it works
@@ -53,9 +52,8 @@ to `DEBUG`.
 * No new CPAN dependencies — only modules shipped with LMS (`Slim::*`,
   `JSON::XS`, `IO::Socket::SSL`).
 * No transcoding, no protocol handler, no settings page, no submenus.
-* `icon.png` is a generated placeholder ("NTS" white-on-black). Replace it with
-  the real square NTS logo (256–512 px PNG) for production; it doubles as the
-  cover-art fallback when the API has no image.
+* `icon.png` is the official square NTS logo (white-on-black). It doubles as the
+  cover-art fallback when the API provides no image.
 * The API signatures marked **VERIFY** in the build brief should be confirmed
   against the LMS source installed on the device
   (`/usr/share/squeezeboxserver/Slim/...`) before relying on edge cases.
