@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extension>
+	<module>Plugins::NTSRadio::Plugin</module>
+	<name>PLUGIN_NTSRADIO</name>
+	<description>PLUGIN_NTSRADIO_DESC</description>
+	<version>1.0.0</version>
+	<creator>Industree</creator>
+	<email>g.alboni@industree.it</email>
+	<category>radio</category>
+	<defaultState>disabled</defaultState>
+	<minTarget>9.0</minTarget>
+	<maxTarget>*</maxTarget>
+</extension>

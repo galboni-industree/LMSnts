@@ -1,0 +1,15 @@
+PLUGIN_NTSRADIO
+	EN	NTS Radio
+	IT	NTS Radio
+
+PLUGIN_NTSRADIO_DESC
+	EN	Live channels NTS 1 & 2 with now-playing show info and artwork.
+	IT	Canali live NTS 1 e 2 con info dello show in onda e copertina.
+
+PLUGIN_NTSRADIO_CH1
+	EN	NTS 1
+	IT	NTS 1
+
+PLUGIN_NTSRADIO_CH2
+	EN	NTS 2
+	IT	NTS 2
