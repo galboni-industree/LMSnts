@@ -1,108 +1,120 @@
 #!/usr/bin/env python3
-"""Generate a square NTS placeholder icon (white "NTS" on black) with no deps.
+"""Generate a square NTS icon (white "NTS" wordmark on black) with no deps.
 
-Produces a valid PNG using only the standard library (zlib/struct). Replace the
-output with the real NTS logo for production use; this is just a clean, square
-fallback so the plugin/menu/cover-art path is never missing an image.
+Pure stdlib (zlib/struct). The three letters are drawn as geometric vector
+shapes and rasterised with 4x supersampling for smooth, anti-aliased edges:
+
+  N  -> two vertical bars + a thick diagonal
+  T  -> top bar + centred stem
+  S  -> two 270-degree rings (missing opposite quadrants) = classic geometric S
+
+This is a faithful reconstruction of the NTS wordmark, not the official SVG
+(which can't be fetched from this sandbox). Swap in the real asset if desired.
 """
+import math
 import struct
-import zlib
 import sys
+import zlib
 
-SIZE = 512
+N = 512                 # canvas size
+SS = 4                  # supersampling factor (SS*SS samples per pixel)
 BG = (0, 0, 0)
 FG = (255, 255, 255)
 
-# 5x7 block font for the three letters we need.
-FONT = {
-    "N": [
-        "1...1",
-        "11..1",
-        "1.1.1",
-        "1.1.1",
-        "1..11",
-        "1...1",
-        "1...1",
-    ],
-    "T": [
-        "11111",
-        "..1..",
-        "..1..",
-        "..1..",
-        "..1..",
-        "..1..",
-        "..1..",
-    ],
-    "S": [
-        ".1111",
-        "1....",
-        "1....",
-        ".111.",
-        "....1",
-        "....1",
-        "1111.",
-    ],
-}
+# Layout (in final 512px space)
+H = 230                 # cap height
+T = 40                  # stroke thickness
+W = 132                 # letter width
+GAP = 26
+Y0 = (N - H) / 2.0      # = 141
+X_N = (N - (3 * W + 2 * GAP)) / 2.0   # left margin, = 32
+X_T = X_N + W + GAP
+X_S = X_T + W + GAP
+
+
+def _dist_seg(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    if L2 == 0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / L2
+    t = 0.0 if t < 0 else 1.0 if t > 1 else t
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def inside(x, y):
+    # --- N ---
+    nx = X_N
+    if Y0 <= y <= Y0 + H:
+        if nx <= x <= nx + T:                 # left bar
+            return True
+        if nx + W - T <= x <= nx + W:          # right bar
+            return True
+        if _dist_seg(x, y, nx + T / 2, Y0, nx + W - T / 2, Y0 + H) <= T / 2:
+            return True                        # diagonal
+
+    # --- T ---
+    tx = X_T
+    cx = tx + W / 2
+    if tx <= x <= tx + W and Y0 <= y <= Y0 + T:        # top bar
+        return True
+    if cx - T / 2 <= x <= cx + T / 2 and Y0 <= y <= Y0 + H:  # stem
+        return True
+
+    # --- S --- two thick rings, opposite quadrants removed
+    r = W / 2.0
+    scx = X_S + r
+    ri = r - T
+    c1y = Y0 + r            # top ring centre
+    c2y = Y0 + H - r        # bottom ring centre
+    d1 = math.hypot(x - scx, y - c1y)
+    if ri <= d1 <= r and not (x > scx and y > c1y):     # drop lower-right
+        return True
+    d2 = math.hypot(x - scx, y - c2y)
+    if ri <= d2 <= r and not (x < scx and y < c2y):     # drop upper-left
+        return True
+
+    return False
 
 
 def build_pixels():
-    px = [[BG for _ in range(SIZE)] for _ in range(SIZE)]
-
-    word = "NTS"
-    cell = 12                       # scale per font pixel
-    gap = 2                         # blank font-columns between letters
-    glyph_w = 5
-    glyph_h = 7
-    total_cols = len(word) * glyph_w + (len(word) - 1) * gap
-    total_w = total_cols * cell
-    total_h = glyph_h * cell
-
-    ox = (SIZE - total_w) // 2
-    oy = (SIZE - total_h) // 2
-
-    col_cursor = 0
-    for ch in word:
-        rows = FONT[ch]
-        for gy in range(glyph_h):
-            for gx in range(glyph_w):
-                if rows[gy][gx] == "1":
-                    x0 = ox + (col_cursor + gx) * cell
-                    y0 = oy + gy * cell
-                    for yy in range(y0, y0 + cell):
-                        for xx in range(x0, x0 + cell):
-                            px[yy][xx] = FG
-        col_cursor += glyph_w + gap
-
+    px = [[BG] * N for _ in range(N)]
+    inv = 1.0 / (SS * SS)
+    offs = [(i + 0.5) / SS for i in range(SS)]
+    for y in range(N):
+        row = px[y]
+        for x in range(N):
+            hits = 0
+            for oy in offs:
+                fy = y + oy
+                for ox in offs:
+                    if inside(x + ox, fy):
+                        hits += 1
+            if hits:
+                c = hits * inv
+                row[x] = tuple(int(BG[i] + (FG[i] - BG[i]) * c) for i in range(3))
     return px
 
 
 def write_png(path, px):
     raw = bytearray()
     for row in px:
-        raw.append(0)  # filter type 0
+        raw.append(0)
         for (r, g, b) in row:
             raw += bytes((r, g, b))
 
     def chunk(tag, data):
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0)  # 8-bit RGB
-    idat = zlib.compress(bytes(raw), 9)
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
 
     with open(path, "wb") as f:
-        f.write(sig)
-        f.write(chunk(b"IHDR", ihdr))
-        f.write(chunk(b"IDAT", idat))
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", N, N, 8, 2, 0, 0, 0)))
+        f.write(chunk(b"IDAT", zlib.compress(bytes(raw), 9)))
         f.write(chunk(b"IEND", b""))
 
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "icon.png"
     write_png(out, build_pixels())
-    print(f"wrote {out} ({SIZE}x{SIZE})")
+    print(f"wrote {out} ({N}x{N}, {SS}x supersampled)")
