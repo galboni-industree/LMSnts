@@ -15,7 +15,10 @@ src/NTSRadio/                 # <- this folder is deployed to .../Plugins/NTSRad
   Plugin.pm                   # menu (OPML) + metadata provider + 60s poller
   strings.txt                 # EN/IT strings
   HTML/EN/plugins/NTSRadio/html/icon.png   # official NTS logo (960x960)
-deploy.sh                     # rsync to the LMS plugins dir + restart (run on device)
+preflight.sh                  # read-only environment checks (changes nothing)
+deploy.sh                     # validate + backup + deploy + restart + log check
+undeploy.sh                   # clean removal, back to a pristine system
+PROCEDURA.md                  # step-by-step install guide (IT) with a Plan B each step
 samples/live.json             # reference fixture of the NTS /api/v2/live response
 ```
 
@@ -37,15 +40,19 @@ Three pieces, all in `Plugin.pm`:
 ## Deploy (on the LMS device)
 
 This repo holds the **sources**. Deployment and the acceptance tests run on the
-target box (aarch64 / DietPi / LMS 9.1.1), not in CI:
+target box (aarch64 / DietPi / LMS 9.1.1), not in CI. Full step-by-step guide
+with a Plan B for every critical step: see [`PROCEDURA.md`](PROCEDURA.md).
 
 ```bash
-./deploy.sh        # rsync to /var/lib/squeezeboxserver/Plugins/NTSRadio + restart
+git clone -b claude/nts-radio-lms-plugin-eWd59 https://github.com/galboni-industree/LMSnts.git ~/nts-plugin
+cd ~/nts-plugin
+./preflight.sh     # read-only checks — changes nothing
+./deploy.sh        # validate + backup + deploy to .../Plugins/NTSRadio + restart
 ```
 
 Then in the LMS web UI: **Settings → Manage Plugins**, enable **NTS Radio**,
 restart. For debugging set **Settings → Advanced → Logging → `plugin.ntsradio`**
-to `DEBUG`.
+to `DEBUG`. To remove cleanly: `./undeploy.sh`.
 
 ## Notes / scope
 

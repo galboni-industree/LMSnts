@@ -22,6 +22,7 @@ use warnings;
 use base qw(Slim::Plugin::OPMLBased);
 
 use JSON::XS ();
+use Time::HiRes ();
 
 use Slim::Utils::Log;
 use Slim::Utils::Strings qw(string);
@@ -46,6 +47,10 @@ my %CACHE;
 
 my $log;
 
+# Register the metadata provider only once, even if initPlugin runs again
+# (e.g. the user disables then re-enables the plugin without a full restart).
+my $PROVIDER_REGISTERED = 0;
+
 sub initPlugin {
 	my $class = shift;
 
@@ -58,10 +63,20 @@ sub initPlugin {
 	$log = logger('plugin.ntsradio');
 
 	# 2) Register the Now Playing metadata provider (synchronous, memory-only).
-	Slim::Formats::RemoteMetadata->registerProvider(
-		match => MATCH,
-		func  => \&_provider,
-	);
+	#    Guarded so a re-init can never stack duplicate providers.
+	if ( !$PROVIDER_REGISTERED ) {
+		eval {
+			Slim::Formats::RemoteMetadata->registerProvider(
+				match => MATCH,
+				func  => \&_provider,
+			);
+		};
+		if ($@) {
+			$log->error("could not register metadata provider: $@");
+		} else {
+			$PROVIDER_REGISTERED = 1;
+		}
+	}
 
 	# 3) Register the OPML menu under Radio.
 	$class->SUPER::initPlugin(
@@ -73,7 +88,9 @@ sub initPlugin {
 	);
 
 	# 4) Kick off the poller (first run immediately, then every POLL_SECS).
-	_startPoll();
+	#    Wrapped so a transient failure here never aborts plugin load.
+	eval { _startPoll(); };
+	$log->error("could not start poller: $@") if $@;
 
 	$log->info('NTS Radio plugin initialised');
 }
@@ -169,22 +186,33 @@ sub _poll {
 	# Idempotent: ensure only one timer is ever scheduled.
 	Slim::Utils::Timers::killTimers(undef, \&_poll);
 
-	my $http = Slim::Networking::SimpleAsyncHTTP->new(
-		\&_gotLive,
-		\&_gotError,
-		{ timeout => 15 },
-	);
-
-	$http->get(API_URL, 'User-Agent' => USER_AGENT);
+	# Fire the async request. Any failure setting it up is swallowed so the
+	# self-healing timer below is ALWAYS rescheduled.
+	eval {
+		my $http = Slim::Networking::SimpleAsyncHTTP->new(
+			\&_gotLive,
+			\&_gotError,
+			{ timeout => 15 },
+		);
+		$http->get(API_URL, 'User-Agent' => USER_AGENT);
+	};
+	$log && $@ && $log->warn("poll setup failed: $@");
 
 	# Always reschedule the next cycle, regardless of this request's outcome.
-	Slim::Utils::Timers::setTimer(undef, time() + POLL_SECS, \&_poll);
+	# Use the same hi-res clock LMS timers run on.
+	Slim::Utils::Timers::setTimer(undef, Time::HiRes::time() + POLL_SECS, \&_poll);
 }
 
 sub _gotLive {
 	my $http = shift;
 
-	my $data = eval { JSON::XS::decode_json($http->content) };
+	my $content = eval { $http->content };
+	if ( !defined $content || !length $content ) {
+		$log && $log->debug('empty /live response');
+		return;
+	}
+
+	my $data = eval { JSON::XS::decode_json($content) };
 	if ( $@ || ref $data ne 'HASH' ) {
 		$log && $log->debug("failed to parse /live JSON: " . ($@ || 'unexpected structure'));
 		return;
@@ -243,16 +271,25 @@ sub _gotError {
 }
 
 # Tell any player currently tuned to this channel to refresh its metadata.
+# Every interaction with player internals is guarded: one odd client must
+# never break the loop or take down the server thread.
 sub _notifyChannel {
 	my $ch = shift;
 
-	for my $client ( Slim::Player::Client::clients() ) {
+	my @clients = eval { Slim::Player::Client::clients() };
+	return unless @clients;
+
+	for my $client (@clients) {
+		next unless $client;
+
 		my $url = _playingUrl($client);
 		next unless defined $url && length $url;
-		next unless _channel_of($url) eq $ch && $url =~ MATCH;
+		next unless $url =~ MATCH && _channel_of($url) eq $ch;
 
-		Slim::Control::Request::notifyFromArray($client, ['newmetadata']);
-		$log && $log->debug('newmetadata -> ' . $client->id . " (ch=$ch)");
+		eval {
+			Slim::Control::Request::notifyFromArray($client, ['newmetadata']);
+			$log && $log->debug('newmetadata -> ' . $client->id . " (ch=$ch)");
+		};
 	}
 }
 
