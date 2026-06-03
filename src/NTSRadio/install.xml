@@ -8,6 +8,9 @@
 	<email>g.alboni@industree.it</email>
 	<category>radio</category>
 	<defaultState>disabled</defaultState>
-	<minTarget>9.0</minTarget>
-	<maxTarget>*</maxTarget>
+	<targetApplication>
+		<name>LMS</name>
+		<minVersion>7.0</minVersion>
+		<maxVersion>*</maxVersion>
+	</targetApplication>
 </extension>
