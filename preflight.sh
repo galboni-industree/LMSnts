@@ -75,10 +75,15 @@ else
 	warn "NTS stream not reachable from here"
 fi
 
-# 6) API reachable? Test with the SAME User-Agent the plugin uses; if that is
-#    blocked, retry with a browser UA to pinpoint a UA/bot-filter issue.
-api_channels() {  # $1 = user agent -> prints channel count or empty
-	curl -s --max-time 10 -A "$1" "$API_URL" 2>/dev/null | jq -r '.results | length' 2>/dev/null
+# 6) API reachable AND parseable? Use the SAME parser the plugin uses (Perl
+#    JSON::PP) — NOT jq, which may be absent on the device and is irrelevant to
+#    the plugin. Test with the plugin's User-Agent; if it fails, retry with a
+#    browser UA to pinpoint a bot/UA filter.
+api_channels() {  # $1 = user agent -> prints channel count, or empty on failure
+	curl -s --max-time 10 -A "$1" "$API_URL" 2>/dev/null | perl -MJSON::PP -0777 -ne '
+		my $d = eval { decode_json($_) };
+		print scalar(@{$d->{results}}) if $d && ref $d->{results} eq "ARRAY";
+	' 2>/dev/null
 }
 api_code() {      # $1 = user agent -> prints HTTP status
 	curl -s -o /dev/null -w '%{http_code}' --max-time 10 -A "$1" "$API_URL" 2>/dev/null
@@ -86,13 +91,16 @@ api_code() {      # $1 = user agent -> prints HTTP status
 
 LEN_P=$(api_channels "$UA_PLUGIN")
 if [[ "$LEN_P" =~ ^[0-9]+$ ]] && (( LEN_P >= 2 )); then
-	ok "NTS API reachable with plugin User-Agent ($LEN_P channels)"
+	ok "NTS API reachable & parseable with plugin User-Agent ($LEN_P channels)"
 else
 	CODE_P=$(api_code "$UA_PLUGIN")
 	LEN_B=$(api_channels "$UA_BROWSER")
 	if [[ "$LEN_B" =~ ^[0-9]+$ ]] && (( LEN_B >= 2 )); then
-		warn "API OK with a browser UA but NOT with the plugin UA (HTTP $CODE_P with plugin UA)."
+		warn "API parseable with a browser UA but NOT the plugin UA (HTTP $CODE_P)."
 		printf '       => likely a bot/UA filter. Tell me: the plugin should send a browser-like UA.\n'
+	elif [[ "$CODE_P" == "200" ]]; then
+		warn "API returned HTTP 200 but the body did not parse as expected JSON."
+		printf '       Inspect the body:  curl -s --max-time 10 -A "%s" %s | head -c 400\n' "$UA_PLUGIN" "$API_URL"
 	else
 		CODE_B=$(api_code "$UA_BROWSER")
 		warn "API not reachable (plugin UA -> HTTP $CODE_P, browser UA -> HTTP $CODE_B)."
