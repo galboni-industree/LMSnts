@@ -83,6 +83,9 @@ else
 	sudo cp -a "$SRC"/. "$DEST"/
 fi
 sudo chown -R "$OWNER" "$DEST"
+# Bump install.xml's mtime so LMS always invalidates its manifest cache
+# ('manifest checksum differs') and re-reads our manifest on the next restart.
+sudo touch "$DEST/install.xml"
 info "files deployed to $DEST"
 
 # --- Restart ---------------------------------------------------------------
