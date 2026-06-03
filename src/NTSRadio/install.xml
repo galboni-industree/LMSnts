@@ -7,6 +7,7 @@
 	<creator>Industree</creator>
 	<email>g.alboni@industree.it</email>
 	<category>radio</category>
+	<icon>plugins/NTSRadio/html/icon.png</icon>
 	<defaultState>disabled</defaultState>
 	<targetApplication>
 		<name>LMS</name>
