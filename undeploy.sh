@@ -5,10 +5,22 @@
 set -euo pipefail
 
 DEST="/var/lib/squeezeboxserver/Plugins/NTSRadio"
-SERVICE="lyrionmusicserver"
 
 die() { printf '\033[31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
+
+detect_service() {
+	local s
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver slimserver lms; do
+		if systemctl cat "$s" >/dev/null 2>&1 || systemctl status "$s" >/dev/null 2>&1; then
+			echo "$s"; return 0
+		fi
+	done
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver; do
+		[[ -x "/etc/init.d/$s" ]] && { echo "$s"; return 0; }
+	done
+	return 1
+}
 
 # Guard rail: never rm anything that isn't the NTSRadio plugin dir.
 case "$DEST" in
@@ -23,6 +35,12 @@ else
 	info "nothing to remove ($DEST not present)"
 fi
 
-info "restarting $SERVICE ..."
-sudo systemctl restart "$SERVICE"
+SERVICE="$(detect_service || true)"
+if [[ -n "$SERVICE" ]]; then
+	info "restarting $SERVICE ..."
+	sudo systemctl restart "$SERVICE" || \
+		echo "      (could not restart automatically — restart LMS manually)"
+else
+	printf '\033[33mWARN:\033[0m LMS service not detected — restart LMS manually to finish removal.\n'
+fi
 info "done — the plugin is gone and LMS is back to its previous state."

@@ -9,16 +9,37 @@ ok()   { printf '  \033[32mOK\033[0m   %s\n' "$1"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
 warn() { printf '  \033[33mWARN\033[0m %s\n' "$1"; WARN=$((WARN+1)); }
 
+API_URL='https://www.nts.live/api/v2/live'
+STREAM_URL='https://stream-relay-geo.ntslive.net/stream?client=direct'
+UA_PLUGIN='LMS-NTSRadio/1.0.0 (+https://lyrion.org)'
+UA_BROWSER='Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+
+# Detect the LMS service name across the known variants / init systems.
+detect_service() {
+	local s
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver slimserver lms; do
+		if systemctl cat "$s" >/dev/null 2>&1 || systemctl status "$s" >/dev/null 2>&1; then
+			echo "$s"; return 0
+		fi
+	done
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver; do
+		[[ -x "/etc/init.d/$s" ]] && { echo "$s"; return 0; }
+	done
+	return 1
+}
+
 echo "== NTS Radio pre-flight (read-only) =="
 
 # 1) LMS service present?
-if systemctl list-unit-files 2>/dev/null | grep -q '^lyrionmusicserver\.service'; then
-	ok "lyrionmusicserver.service exists"
+SERVICE="$(detect_service || true)"
+if [[ -n "$SERVICE" ]]; then
+	ok "LMS service detected: $SERVICE"
 else
-	warn "lyrionmusicserver.service not found (check the exact service name)"
+	warn "LMS service not auto-detected. Find it with:"
+	printf '       systemctl list-units --type=service --all | grep -iE "lyrion|squeeze|logitech|slim|lms"\n'
 fi
 
-# 2) Plugins dir present and known owner?
+# 2) Plugins dir present?
 PDIR="/var/lib/squeezeboxserver/Plugins"
 if [[ -d "$PDIR" ]]; then
 	ok "plugins dir exists: $PDIR"
@@ -34,32 +55,52 @@ else
 	bad "IO::Socket::SSL missing — HTTPS to NTS will fail"
 fi
 
-# 4) JSON::XS available (used by the plugin)?
+# 4) JSON available? The plugin prefers JSON::XS but falls back to core JSON::PP,
+#    so as long as EITHER is present we are fine.
 if perl -MJSON::XS -e 'exit 0' 2>/dev/null; then
-	ok "JSON::XS present"
+	ok "JSON::XS present (system Perl)"
+elif perl -MJSON::PP -e 'exit 0' 2>/dev/null; then
+	ok "JSON::PP present (core) — plugin will use it as fallback"
 else
-	bad "JSON::XS missing — plugin cannot parse the API"
+	bad "neither JSON::XS nor JSON::PP available"
 fi
 
 # 5) Stream reachable and audio/mpeg? (network)
-CT=$(curl -s --max-time 8 -L -D - -o /dev/null 'https://stream-relay-geo.ntslive.net/stream?client=direct' 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print tolower($2)}' | tail -1)
+CT=$(curl -s --max-time 8 -L -D - -o /dev/null "$STREAM_URL" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print tolower($2)}' | tail -1)
 if [[ "$CT" == audio/mpeg* ]]; then
-	ok "NTS 1 stream reachable (content-type: $CT)"
+	ok "NTS stream reachable (content-type: $CT)"
 elif [[ -n "$CT" ]]; then
-	warn "NTS 1 stream content-type unexpected: $CT"
+	warn "NTS stream content-type unexpected: $CT"
 else
-	warn "NTS 1 stream not reachable from here (check network/firewall)"
+	warn "NTS stream not reachable from here"
 fi
 
-# 6) API reachable and >=2 channels? (network)
-LEN=$(curl -s --max-time 10 'https://www.nts.live/api/v2/live' 2>/dev/null | jq -r '.results | length' 2>/dev/null)
-if [[ "$LEN" =~ ^[0-9]+$ ]] && (( LEN >= 2 )); then
-	ok "NTS API reachable ($LEN channels)"
+# 6) API reachable? Test with the SAME User-Agent the plugin uses; if that is
+#    blocked, retry with a browser UA to pinpoint a UA/bot-filter issue.
+api_channels() {  # $1 = user agent -> prints channel count or empty
+	curl -s --max-time 10 -A "$1" "$API_URL" 2>/dev/null | jq -r '.results | length' 2>/dev/null
+}
+api_code() {      # $1 = user agent -> prints HTTP status
+	curl -s -o /dev/null -w '%{http_code}' --max-time 10 -A "$1" "$API_URL" 2>/dev/null
+}
+
+LEN_P=$(api_channels "$UA_PLUGIN")
+if [[ "$LEN_P" =~ ^[0-9]+$ ]] && (( LEN_P >= 2 )); then
+	ok "NTS API reachable with plugin User-Agent ($LEN_P channels)"
 else
-	warn "NTS API not reachable / unexpected (metadata will use fallbacks until it recovers)"
+	CODE_P=$(api_code "$UA_PLUGIN")
+	LEN_B=$(api_channels "$UA_BROWSER")
+	if [[ "$LEN_B" =~ ^[0-9]+$ ]] && (( LEN_B >= 2 )); then
+		warn "API OK with a browser UA but NOT with the plugin UA (HTTP $CODE_P with plugin UA)."
+		printf '       => likely a bot/UA filter. Tell me: the plugin should send a browser-like UA.\n'
+	else
+		CODE_B=$(api_code "$UA_BROWSER")
+		warn "API not reachable (plugin UA -> HTTP $CODE_P, browser UA -> HTTP $CODE_B)."
+		printf '       Diagnose DNS/proxy:  curl -sS -v --max-time 10 -A "%s" %s | head -c 400\n' "$UA_BROWSER" "$API_URL"
+	fi
 fi
 
 echo "-- summary: $PASS ok, $WARN warn, $FAIL fail --"
-# Only hard failures (missing Perl modules / dirs) block a clean install.
-# Network WARNs are non-fatal: the plugin degrades gracefully.
+echo "   (network WARNs are non-fatal: the plugin degrades gracefully and"
+echo "    fills metadata in once the API is reachable.)"
 exit $(( FAIL > 0 ? 1 : 0 ))

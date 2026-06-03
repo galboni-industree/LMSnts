@@ -21,7 +21,6 @@ use warnings;
 
 use base qw(Slim::Plugin::OPMLBased);
 
-use JSON::XS ();
 use Time::HiRes ();
 
 use Slim::Utils::Log;
@@ -42,10 +41,26 @@ use constant USER_AGENT => 'LMS-NTSRadio/1.0.0 (+https://lyrion.org)';
 # 302-redirected to radiomast.io edge hosts, so we must match both.
 use constant MATCH => qr/(?:ntslive\.net|radiomast\.io)/i;
 
+# JSON decoder, picked once at load time. Prefer JSON::XS (fast, bundled with
+# LMS); fall back to core JSON::PP so the plugin works even on a stripped Perl.
+my $JSON_DECODE;
+BEGIN {
+	if ( eval { require JSON::XS; 1 } ) {
+		$JSON_DECODE = \&JSON::XS::decode_json;
+	} else {
+		require JSON::PP;
+		$JSON_DECODE = \&JSON::PP::decode_json;
+	}
+}
+
 # In-memory, ephemeral cache. key "1"/"2" -> { title, cover, end }.
 my %CACHE;
 
 my $log;
+
+# Consecutive poll-failure counter, used to keep the log clean: the first
+# failure is logged at WARN, the rest at DEBUG, and recovery at INFO.
+my $FAIL_STREAK = 0;
 
 # Register the metadata provider only once, even if initPlugin runs again
 # (e.g. the user disables then re-enables the plugin without a full restart).
@@ -212,10 +227,16 @@ sub _gotLive {
 		return;
 	}
 
-	my $data = eval { JSON::XS::decode_json($content) };
+	my $data = eval { $JSON_DECODE->($content) };
 	if ( $@ || ref $data ne 'HASH' ) {
 		$log && $log->debug("failed to parse /live JSON: " . ($@ || 'unexpected structure'));
 		return;
+	}
+
+	# Successful fetch+parse: note recovery and reset the failure streak.
+	if ($FAIL_STREAK) {
+		$log && $log->info("NTS /live recovered after $FAIL_STREAK failed attempt(s)");
+		$FAIL_STREAK = 0;
 	}
 
 	my $results = $data->{results};
@@ -266,8 +287,17 @@ sub _gotLive {
 sub _gotError {
 	my ($http, $error) = @_;
 
-	# Keep the last known-good cache; the next timer will retry.
-	$log && $log->warn('NTS /live request failed: ' . ($error || $http->error || 'unknown error'));
+	# Keep the last known-good cache; the next timer will retry. To avoid
+	# filling server.log when the API is down for a long time, only the first
+	# failure of a streak is logged at WARN; the rest go to DEBUG.
+	$FAIL_STREAK++;
+	my $msg = 'NTS /live request failed: ' . ($error || eval { $http->error } || 'unknown error');
+
+	if ( $FAIL_STREAK == 1 ) {
+		$log && $log->warn("$msg (will retry every " . POLL_SECS . 's; further failures at debug)');
+	} else {
+		$log && $log->debug("$msg (streak=$FAIL_STREAK)");
+	}
 }
 
 # Tell any player currently tuned to this channel to refresh its metadata.

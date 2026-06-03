@@ -57,7 +57,8 @@ to `DEBUG`. To remove cleanly: `./undeploy.sh`.
 ## Notes / scope
 
 * No new CPAN dependencies — only modules shipped with LMS (`Slim::*`,
-  `JSON::XS`, `IO::Socket::SSL`).
+  `IO::Socket::SSL`). JSON is decoded with `JSON::XS` when present and falls back
+  to core `JSON::PP`, so the plugin works even on a stripped Perl.
 * No transcoding, no protocol handler, no settings page, no submenus.
 * `icon.png` is the official square NTS logo (white-on-black). It doubles as the
   cover-art fallback when the API provides no image.

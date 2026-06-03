@@ -77,14 +77,28 @@ oppure via chiavetta USB. Il contenuto necessario è solo la cartella
 quel momento) **non bloccano**: il plugin parte comunque e si popola appena la
 rete torna.
 
+**Verifica (note importanti):**
+* **`JSON::XS`** può risultare assente nel Perl *di sistema*: non è un problema.
+  Il plugin usa `JSON::XS` se c'è (LMS lo include) e **altrimenti ripiega su
+  `JSON::PP`** (modulo core). Il preflight infatti dà `OK` se trova l'uno o
+  l'altro.
+* Il **nome del servizio** viene **auto-rilevato** dagli script (prova
+  `lyrionmusicserver`, `squeezeboxserver`, `logitechmediaserver`, ecc.). Se il
+  preflight non lo trova, te lo dice e ti dà il comando per scoprirlo.
+
 **Piano B:**
-* `FAIL` su `IO::Socket::SSL` o `JSON::XS`: in teoria impossibile su LMS 9.1.1
-  (sono inclusi). Se accade, **non procedere**: verifica di essere sul box LMS
-  giusto / con il Perl di LMS. Non installare CPAN a mano sul Perl di sistema.
-* `WARN` su stream/API: procedi pure. Se vuoi capire se è un blocco di rete:
-  `curl -sI 'https://www.nts.live/api/v2/live'`.
-* Nome servizio diverso da `lyrionmusicserver`: annotalo e correggi la variabile
-  `SERVICE` in cima a `deploy.sh` e `undeploy.sh` prima del Passo 2.
+* `FAIL` su `IO::Socket::SSL`: improbabile su LMS 9.1.1. Se accade, **non
+  procedere**: verifica di essere sul box giusto. Non installare CPAN a mano.
+* `FAIL` su JSON (né `JSON::XS` né `JSON::PP`): non procedere e segnalamelo.
+* **Servizio non rilevato:** trovalo con
+  `systemctl list-units --type=service --all | grep -iE "lyrion|squeeze|logitech|slim|lms"`
+  e dimmi il nome (lo aggiungo all'auto-detect, oppure lo riavvii a mano).
+* **`WARN` su API** (lo stream va ma l'API no): il preflight prova prima con
+  l'User-Agent del plugin e poi con uno "da browser". Se l'API risponde **solo**
+  con l'UA da browser, è un filtro anti-bot: **segnalamelo**, faccio mandare al
+  plugin un UA da browser. Comando di diagnosi suggerito dallo stesso preflight:
+  `curl -sS -v --max-time 10 -A "Mozilla/5.0" 'https://www.nts.live/api/v2/live' | head -c 400`.
+  In ogni caso l'audio funziona; i metadati arrivano appena l'API è raggiungibile.
 
 ---
 

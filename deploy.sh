@@ -16,12 +16,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$SCRIPT_DIR/src/NTSRadio"
 DEST="/var/lib/squeezeboxserver/Plugins/NTSRadio"
 OWNER="squeezeboxserver:nogroup"
-SERVICE="lyrionmusicserver"
 LOG="/var/log/squeezeboxserver/server.log"
 BACKUP_DIR="$HOME/nts-backups"
 
 die() { printf '\033[31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
+
+# Detect the LMS service name across known variants / init systems.
+detect_service() {
+	local s
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver slimserver lms; do
+		if systemctl cat "$s" >/dev/null 2>&1 || systemctl status "$s" >/dev/null 2>&1; then
+			echo "$s"; return 0
+		fi
+	done
+	for s in lyrionmusicserver squeezeboxserver logitechmediaserver; do
+		[[ -x "/etc/init.d/$s" ]] && { echo "$s"; return 0; }
+	done
+	return 1
+}
 
 # --- Guard rails -----------------------------------------------------------
 # Refuse to operate on anything that is not exactly the NTSRadio plugin dir.
@@ -37,15 +50,15 @@ done
 info "source validated: $SRC"
 
 # --- Best-effort syntax check (before we touch the server) -----------------
-# Uses the installed LMS libs so base classes resolve. A failure here is
-# advisory (false negatives are possible), so we warn rather than abort.
+# Advisory only: off-device this routinely yields false negatives because the
+# Slim base classes and LMS-bundled CPAN modules are not on @INC. The real
+# safety net is the post-restart log scan + backup + undeploy.sh below, so we
+# never block on this.
 if perl -I/usr/share/squeezeboxserver -c "$SRC/Plugin.pm" >/dev/null 2>&1; then
 	info "Plugin.pm syntax check passed"
 else
-	printf '\033[33mWARN:\033[0m Plugin.pm did not pass the offline syntax check.\n'
-	printf '      This can be a false negative (some Slim modules load lazily).\n'
-	read -r -p "      Continue with deploy anyway? [y/N] " a
-	[[ "${a:-N}" =~ ^[Yy]$ ]] || die "aborted by user before any change was made"
+	printf '\033[33mWARN:\033[0m offline syntax check inconclusive (Slim libs not fully on @INC).\n'
+	printf '      Proceeding; the post-restart log scan is the real validation.\n'
 fi
 
 # --- Backup current install (rollback safety) ------------------------------
@@ -73,8 +86,18 @@ sudo chown -R "$OWNER" "$DEST"
 info "files deployed to $DEST"
 
 # --- Restart ---------------------------------------------------------------
-info "restarting $SERVICE ..."
-sudo systemctl restart "$SERVICE"
+SERVICE="$(detect_service || true)"
+if [[ -n "$SERVICE" ]]; then
+	info "restarting $SERVICE ..."
+	if ! sudo systemctl restart "$SERVICE"; then
+		printf '\033[33mWARN:\033[0m could not restart %s automatically.\n' "$SERVICE"
+		echo "      Restart LMS yourself (web UI, or: sudo systemctl restart $SERVICE)."
+	fi
+else
+	printf '\033[33mWARN:\033[0m LMS service name not detected — files are deployed but the\n'
+	echo "      server was NOT restarted. Restart it manually (web UI), or find it with:"
+	echo '      systemctl list-units --type=service --all | grep -iE "lyrion|squeeze|logitech|slim|lms"'
+fi
 
 # Give LMS a moment to load plugins, then check the log for our errors.
 sleep 8
